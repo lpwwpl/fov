@@ -30,67 +30,108 @@ JonesPlotItem::JonesPlotItem(double x, double y, double azimuth, double elliptic
 	setZ(100);
 }
 
-void JonesPlotItem::draw(QPainter* painter,
-	const QwtScaleMap& xMap, const QwtScaleMap& yMap,
-	const QRectF& canvasRect) const
+void JonesPlotItem::draw(QPainter* painter, const QwtScaleMap& xMap, const QwtScaleMap& yMap,const QRectF& canvasRect) const
 {
-	// -------------------------------------------------------------
-	// 1. 线性映射：将 ellipticity 拉伸对比度
-	// 数据范围约 [0.79, 2.35] → 映射到视觉轴比 [0.20, 0.80]
-	// -------------------------------------------------------------
+	// 零椭圆率绘制为直线，方向箭头保留在线段中部；
+	// 保留已有坐标映射、azimuth 弧度、线宽和颜色设定。
+	if (std::abs(m_ellipticity) <= 1e-12) 
+	{
+		const double a = m_ellipseSize;
+		const double cosA = std::cos(m_azimuth);
+		const double sinA = std::sin(m_azimuth);
+		const QPointF p1(xMap.transform(m_x - a * cosA),yMap.transform(m_y - a * sinA));
+		const QPointF p2(xMap.transform(m_x + a * cosA),yMap.transform(m_y + a * sinA));
+
+		if (!canvasRect.intersects(QRectF(p1, p2).normalized().adjusted(-15, -15, 15, 15)))
+			return;
+
+		painter->save();
+		painter->setRenderHint(QPainter::Antialiasing, true);
+		QPen pen(m_color, m_width);
+		pen.setJoinStyle(Qt::RoundJoin);
+		pen.setCapStyle(Qt::RoundCap);
+		painter->setPen(pen);
+		painter->setBrush(Qt::NoBrush);
+		painter->drawLine(p1, p2);
+
+		// 参考图的几何形态：直线 + 中部的小箭头；
+		// 箭头的朝向与 p1 -> p2 一致。
+		if (m_showArrow) 
+		{
+			const QPointF delta = p2 - p1;
+			const double len = std::hypot(delta.x(), delta.y());
+			if (len > 1e-6) 
+			{
+				const QPointF direction(delta.x() / len, delta.y() / len);
+				const QPointF normal(-direction.y(), direction.x());
+				const QPointF middle = (p1 + p2) * 0.5;
+
+				// 与原线条颜色一致的实心小箭头，绘制在直线中部。
+				// 大小为像素单位，缩放视图时仍保持清晰。
+				const double arrowLength = qMin(7.0, len * 0.28);
+				const double arrowHalfWidth = qMin(2.5, len * 0.10);
+				const QPointF tip = middle + direction * (arrowLength * 0.5);
+				const QPointF base = middle - direction * (arrowLength * 0.5);
+				QPolygonF arrow;
+				arrow << tip << (base + normal * arrowHalfWidth) << (base - normal * arrowHalfWidth);
+
+				painter->setPen(Qt::NoPen);
+				painter->setBrush(m_color);
+				painter->drawPolygon(arrow);
+			}
+		}
+		painter->restore();
+		return;
+	}
+
+	// 以下非零椭圆率路径
 	double chiVal = std::abs(m_ellipticity);
 	double range = m_ellMax - m_ellMin;
-
-	double norm = 0.5; // 防止除以 0 时的默认值
-	if (range > 1e-6) {
+	double norm = 0.5;
+	if (range > 1e-6) 
+	{
 		norm = (chiVal - m_ellMin) / range;
 	}
 
-	// 线性映射到 0.20 ~ 0.80 之间，这样能明显看出胖瘦区别
 	double ratio = 0.20 + norm * 0.60;
 	ratio = qBound(0.20, ratio, 0.80);
 
-	// 2. 椭圆半轴
 	const double a = m_ellipseSize;
 	const double b = m_ellipseSize * ratio;
-
-	// -------------------------------------------------------------
-	// 3. 方位角：弧度，直接使用
-	// -------------------------------------------------------------
 	const double phi = m_azimuth;
 	const double cosA = std::cos(phi);
 	const double sinA = std::sin(phi);
 
-	// 4. 生成椭圆点
 	const int N = 36;
 	const int i0 = int(0.72 * N);
 	const int i1 = qMin(i0 + 4, N);
-
 	QPolygonF poly;
 	poly.reserve(N + 1);
 	QPointF pStart, pEnd;
-
-	for (int i = 0; i <= N; ++i) {
-		const double t = 2.0 * M_PI * i / N;
+	// ellipticity 决定 Jones 椭圆的旋向。
+	// Qwt 的屏幕 Y 轴方向与数学坐标相反，因此参数方向需要反号。最终屏幕视觉约定：
+	//   ellipticity < 0 : 逆时针
+	//   ellipticity > 0 : 顺时针
+	// 通过反转参数 t 的方向，同时让箭头的 pStart -> pEnd 与曲线旋向保持一致。
+	const double rotationSign = (m_ellipticity > 0.0) ? -1.0 : 1.0;
+	for (int i = 0; i <= N; ++i) 
+	{
+		const double t = rotationSign * 2.0 * M_PI * i / N;
 		const double lx = a * std::cos(t);
 		const double ly = b * std::sin(t);
 		const double rx = lx * cosA - ly * sinA;
 		const double ry = lx * sinA + ly * cosA;
-
 		QPointF pt(xMap.transform(m_x + rx), yMap.transform(m_y + ry));
 		poly << pt;
-
 		if (i == i0) pStart = pt;
 		if (i == i1) pEnd = pt;
 	}
 
-	// 5. 视口裁剪
-	if (!canvasRect.intersects(poly.boundingRect().adjusted(-15, -15, 15, 15))) return;
-
+	if (!canvasRect.intersects(poly.boundingRect().adjusted(-15, -15, 15, 15)))
+		return;
 	painter->save();
 	painter->setRenderHint(QPainter::Antialiasing, true);
 
-	// 6. 绘制椭圆外框
 	QPen pen(m_color, m_width);
 	pen.setJoinStyle(Qt::RoundJoin);
 	pen.setCapStyle(Qt::RoundCap);
@@ -98,36 +139,27 @@ void JonesPlotItem::draw(QPainter* painter,
 	painter->setBrush(Qt::NoBrush);
 	painter->drawPolyline(poly);
 
-	// 7. 绘制逆时针箭头（V字形空心线条，大幅加长）
 	if (m_showArrow) {
 		double dx = pEnd.x() - pStart.x();
 		double dy = pEnd.y() - pStart.y();
 		double len = std::hypot(dx, dy);
-		if (len > 1e-6) {
+		if (len > 1e-6) 
+		{
 			dx /= len;
 			dy /= len;
-
-			// 箭头长度设置（可以在此处微调，12.0 已经比较明显）
 			const double headLen = 6;
-			// 箭头张角（30度）
 			const double arrowAngle = M_PI / 6.0;
-
 			const double tipX = pEnd.x();
 			const double tipY = pEnd.y();
 			const double angle = std::atan2(dy, dx);
-
-			// 利用三角函数算出 V 字形左右两个尾翼的端点
-			QPointF p1 = QPointF(tipX, tipY) - QPointF(headLen * std::cos(angle - arrowAngle), headLen * std::sin(angle - arrowAngle));
-			QPointF p2 = QPointF(tipX, tipY) - QPointF(headLen * std::cos(angle + arrowAngle), headLen * std::sin(angle + arrowAngle));
-
-			// 使用与椭圆相同的线宽，不填充（空心）
-			painter->setPen(QPen(m_color, m_width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+			QPointF p1 = QPointF(tipX, tipY) - QPointF(headLen * std::cos(angle - arrowAngle),headLen * std::sin(angle - arrowAngle));
+			QPointF p2 = QPointF(tipX, tipY) - QPointF(headLen * std::cos(angle + arrowAngle),headLen * std::sin(angle + arrowAngle));
+			painter->setPen(QPen(m_color, m_width, Qt::SolidLine,Qt::RoundCap, Qt::RoundJoin));
 			painter->setBrush(Qt::NoBrush);
 			painter->drawLine(QPointF(tipX, tipY), p1);
 			painter->drawLine(QPointF(tipX, tipY), p2);
 		}
 	}
-
 	painter->restore();
 }
 
@@ -282,7 +314,6 @@ bool JonesViewWidget::loadDataFromFile(const QString& filename)
 	return true;
 }
 
-// 绘制全部 758 个椭圆
 void JonesViewWidget::updatePlot(const QVector<JonesVector>& data)
 {
 	clearAllJonesItems();
@@ -290,7 +321,8 @@ void JonesViewWidget::updatePlot(const QVector<JonesVector>& data)
 
 	// 1. 自动计算 ellipticity 的极值，用于后续的线性映射
 	double ellMin = 1e9, ellMax = -1e9;
-	for (const JonesVector& vec : data) {
+	for (const JonesVector& vec : data) 
+	{
 		double v = std::abs(vec.ellipticity);
 		ellMin = qMin(ellMin, v);
 		ellMax = qMax(ellMax, v);
@@ -301,10 +333,9 @@ void JonesViewWidget::updatePlot(const QVector<JonesVector>& data)
 	const double baseWidth = 0.6;  // 细线
 
 	int index = 0;
-	for (const JonesVector& vec : data) {
-		JonesPlotItem* item = new JonesPlotItem(
-			vec.x, vec.y, vec.azimuth, vec.ellipticity,
-			baseColor, baseWidth, m_ellipseSize, ellMin, ellMax);
+	for (const JonesVector& vec : data) 
+	{
+		JonesPlotItem* item = new JonesPlotItem(vec.x, vec.y, vec.azimuth, vec.ellipticity,	baseColor, baseWidth, m_ellipseSize, ellMin, ellMax);
 		item->attach(m_plot);
 		m_jonesItems.append(item);
 
@@ -412,13 +443,15 @@ void JonesViewWidget::enforceAspectRatio(double aspect)
 	const double pxPerDataY = h / yRange;
 	const double current = pxPerDataX / pxPerDataY;
 
-	if (current > aspect * 1.001) {
+	if (current > aspect * 1.001) 
+	{
 		const double newXRange = xRange * current / aspect;
 		const double cx = (xMin + xMax) * 0.5;
 		xMin = cx - newXRange * 0.5;
 		xMax = cx + newXRange * 0.5;
 	}
-	else if (current < aspect / 1.001) {
+	else if (current < aspect / 1.001) 
+	{
 		const double newYRange = yRange * aspect / current;
 		const double cy = (yMin + yMax) * 0.5;
 		yMin = cy - newYRange * 0.5;
