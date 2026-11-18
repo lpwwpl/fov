@@ -14,6 +14,7 @@
 #include "PlotBase.h"
 
 class QSplitter;
+class QCheckBox;
 
 struct JonesVector {
 	double x;
@@ -37,6 +38,7 @@ public:
 	void setShowArrow(bool show) { m_showArrow = show; }
 	void setEllipseSize(double sizeData) { m_ellipseSize = sizeData; }
 	void setEllRange(double minV, double maxV) { m_ellMin = minV; m_ellMax = maxV; }
+	void setZeroEllipticityAsLine(bool enabled) { m_zeroEllipticityAsLine = enabled; }
 
 public:
 	double m_x, m_y;
@@ -50,6 +52,7 @@ public:
 
 private:
 	bool   m_showArrow = true;
+	bool   m_zeroEllipticityAsLine = true;
 };
 
 class JonesViewWidget : public QWidget
@@ -112,6 +115,8 @@ private:
 	PlotBase* m_toolBar_plot;
 	QwtPlotGrid* m_grid;
 	QwtPropertyBrowser* m_simple_browser;
+	QCheckBox* m_zeroEllipticityLineCheck;
+	QWidget* m_propertyPanel;
 	QSplitter* m_splitter;
 };
 

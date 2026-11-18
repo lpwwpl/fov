@@ -8,6 +8,7 @@
 #include <QPolygonF>
 #include <QSplitter>
 #include <QSignalBlocker>
+#include <QCheckBox>
 #include <qwt_scale_widget.h>
 #include <qwt_scale_engine.h>
 #include <qwt_scale_div.h>
@@ -34,7 +35,7 @@ void JonesPlotItem::draw(QPainter* painter, const QwtScaleMap& xMap, const QwtSc
 {
 	// 零椭圆率绘制为直线，方向箭头保留在线段中部；
 	// 保留已有坐标映射、azimuth 弧度、线宽和颜色设定。
-	if (std::abs(m_ellipticity) <= 1e-12) 
+	if (m_zeroEllipticityAsLine && std::abs(m_ellipticity) <= 1e-12) 
 	{
 		const double a = m_ellipseSize;
 		const double cosA = std::cos(m_azimuth);
@@ -109,10 +110,12 @@ void JonesPlotItem::draw(QPainter* painter, const QwtScaleMap& xMap, const QwtSc
 	poly.reserve(N + 1);
 	QPointF pStart, pEnd;
 	// ellipticity 决定 Jones 椭圆的旋向。
-	// Qwt 的屏幕 Y 轴方向与数学坐标相反，因此参数方向需要反号。最终屏幕视觉约定：
+	// Qwt 的屏幕 Y 轴方向与数学坐标相反，因此参数方向需要反号。
 	//   ellipticity < 0 : 逆时针
 	//   ellipticity > 0 : 顺时针
 	// 通过反转参数 t 的方向，同时让箭头的 pStart -> pEnd 与曲线旋向保持一致。
+	// 不勾选“椭圆率为0直线”时，零椭圆率固定按逆时针绘制。
+	// 非零值仍保持原有约定：负值逆时针，正值顺时针。
 	const double rotationSign = (m_ellipticity > 0.0) ? -1.0 : 1.0;
 	for (int i = 0; i <= N; ++i) 
 	{
@@ -180,6 +183,26 @@ JonesViewWidget::JonesViewWidget(QWidget* parent)
 	connect(m_toolBar_plot, SIGNAL(signalDisplayProperties(int)), this, SLOT(slotDisplayProperties(int)));
 
 	m_simple_browser = new QwtPropertyBrowser(m_settings, m_plot, m_grid, m_toolBar_plot->m_legend, this);
+
+	// Jones 专用显示选项：放在 property browser 正上方。
+	// 默认勾选，ellipticity == 0 时画直线
+	m_zeroEllipticityLineCheck = new QCheckBox(QString::fromUtf8("椭圆率为0直线"), this);
+	m_zeroEllipticityLineCheck->setChecked(true);
+
+	m_propertyPanel = new QWidget(this);
+	QVBoxLayout* propertyLayout = new QVBoxLayout(m_propertyPanel);
+	propertyLayout->setContentsMargins(0, 0, 0, 0);
+	propertyLayout->setSpacing(4);
+	propertyLayout->addWidget(m_zeroEllipticityLineCheck);
+	propertyLayout->addWidget(m_simple_browser, 1);
+
+	connect(m_zeroEllipticityLineCheck, &QCheckBox::toggled, this, [this](bool checked) {
+		for (JonesPlotItem* item : m_jonesItems) {
+			if (item) item->setZeroEllipticityAsLine(checked);
+		}
+		if (m_plot) m_plot->replot();
+	});
+
 	connect(m_simple_browser, SIGNAL(signalUpdateItemStyle(int)), this, SLOT(slotUpdateItemStyle(int)));
 	connect(m_simple_browser, SIGNAL(signalXScaleAxes()), this, SLOT(updateXScaleAxes()));
 	connect(m_simple_browser, SIGNAL(signalYScaleAxes()), this, SLOT(updateYScaleAxes()));
@@ -188,11 +211,11 @@ JonesViewWidget::JonesViewWidget(QWidget* parent)
 
 	m_splitter = new QSplitter(this);
 	m_splitter->addWidget(m_toolBar_plot);
-	m_splitter->addWidget(m_simple_browser);
+	m_splitter->addWidget(m_propertyPanel);
 	m_splitter->setStretchFactor(0, 1);
 	m_splitter->setStretchFactor(1, 0);
-	m_simple_browser->setMinimumWidth(300);
-	m_simple_browser->setMaximumWidth(400);
+	m_propertyPanel->setMinimumWidth(300);
+	m_propertyPanel->setMaximumWidth(400);
 	m_splitter->setCollapsible(1, false);
 	m_splitter->setSizes({ 900, 300 });
 
@@ -336,6 +359,7 @@ void JonesViewWidget::updatePlot(const QVector<JonesVector>& data)
 	for (const JonesVector& vec : data) 
 	{
 		JonesPlotItem* item = new JonesPlotItem(vec.x, vec.y, vec.azimuth, vec.ellipticity,	baseColor, baseWidth, m_ellipseSize, ellMin, ellMax);
+		item->setZeroEllipticityAsLine(!m_zeroEllipticityLineCheck || m_zeroEllipticityLineCheck->isChecked());
 		item->attach(m_plot);
 		m_jonesItems.append(item);
 
